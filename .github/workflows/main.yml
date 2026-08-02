@@ -106,7 +106,7 @@ jobs:
           if [ -z "$MAKEFILE_PATH" ]; then
             echo "Error: makefile not found!"
             exit 1
-          }
+          fi
           
           ENGINE_DIR=$(dirname "$MAKEFILE_PATH")
           cd "$ENGINE_DIR"
