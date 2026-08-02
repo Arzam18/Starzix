@@ -121,10 +121,10 @@ jobs:
           
           echo "Compiling using: $($CXX --version | head -n 1)"
           
-          # Compile using Makefile with cross-compilation flags
+          # Compile using Makefile with cross-compilation flags (-std=c++2b for Clang 17)
           make \
             CXX="$CXX" \
-            CXXFLAGS="-std=c++23 -O3 -DNDEBUG -march=armv8-a -funroll-loops -Wall" \
+            CXXFLAGS="-std=c++2b -O3 -DNDEBUG -march=armv8-a -funroll-loops -Wall" \
             WARNINGS="" \
             EXE="Starzix_android_arm64"
 
