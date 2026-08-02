@@ -101,18 +101,35 @@ jobs:
 
       - name: Build Starzix Executable for Android
         run: |
+          # Automatically find 'makefile' case-insensitively
+          MAKEFILE_PATH=$(find . -iname "makefile" -maxdepth 3 | head -n 1)
+          if [ -z "$MAKEFILE_PATH" ]; then
+            echo "Error: makefile not found!"
+            exit 1
+          }
+          
+          ENGINE_DIR=$(dirname "$MAKEFILE_PATH")
+          cd "$ENGINE_DIR"
+
+          # Remove hardcoded -march=native from the makefile to allow cross-compilation
+          sed -i 's/-march=native//g' makefile || true
+          sed -i 's/-march=native//g' Makefile || true
+
           # Locate the NDK LLVM toolchain bin directory
           TOOLCHAIN="${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin"
           CXX="$TOOLCHAIN/aarch64-linux-android24-clang++"
           
           echo "Compiling using: $($CXX --version | head -n 1)"
           
-          # Compile using Makefile with cross-compilation flags and scalar SIMD fallback
+          # Compile using Makefile with cross-compilation flags
           make \
             CXX="$CXX" \
             CXXFLAGS="-std=c++23 -O3 -DNDEBUG -march=armv8-a -funroll-loops -Wall" \
             WARNINGS="" \
             EXE="Starzix_android_arm64"
+
+          # Move binary back to workspace root for artifact uploading
+          mv Starzix_android_arm64 ../Starzix_android_arm64
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
