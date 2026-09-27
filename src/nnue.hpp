@@ -348,7 +348,11 @@ public:
 
 }; // struct BothAccumulators
 
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+inline i32 evaluate(const BothAccumulators& bothAccs, const Color stm)
+#else
 constexpr i32 evaluate(const BothAccumulators& bothAccs, const Color stm)
+#endif
 {
     assert(bothAccs.mUpdated);
 
