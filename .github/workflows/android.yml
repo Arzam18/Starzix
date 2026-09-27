@@ -1,0 +1,100 @@
+name: Build Starzix for Android ARM64 NEON
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'src/**'
+      - '3rd-party/**'
+      - '.github/workflows/android.yml'
+
+jobs:
+  build-android:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Android NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sdkmanager --install "ndk;27.2.12479018"
+          echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/27.2.12479018" >> "$GITHUB_ENV"
+
+      - name: Build Starzix
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          NDK="$ANDROID_NDK_ROOT"
+          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          CXX="$TOOLCHAIN/aarch64-linux-android24-clang++"
+
+          test -f src/net.bin
+
+          "$CXX" \
+            -std=c++23 \
+            -O3 \
+            -flto \
+            -fuse-ld=lld \
+            -funroll-loops \
+            -fconstexpr-steps=100000000 \
+            -march=armv8-a+simd \
+            -Wall \
+            -Wextra \
+            -Werror \
+            -Wunused \
+            -Wconversion \
+            -Wsign-conversion \
+            -Wshadow \
+            -Wpedantic \
+            -Wold-style-cast \
+            -DNDEBUG \
+            -fPIE \
+            -pie \
+            -pthread \
+            -static-libstdc++ \
+            src/*.cpp \
+            -o Starzix-android-arm64
+
+          "$TOOLCHAIN/llvm-strip" Starzix-android-arm64
+
+          file Starzix-android-arm64
+
+      - name: Verify Android runtime dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          NDK="$ANDROID_NDK_ROOT"
+          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+
+          echo "Dynamic dependencies:"
+          "$TOOLCHAIN/llvm-readelf" -d Starzix-android-arm64 || true
+
+          if "$TOOLCHAIN/llvm-readelf" -d Starzix-android-arm64 \
+              | grep -q 'libc++_shared.so'; then
+            echo "ERROR: libc++_shared.so is still required"
+            exit 1
+          fi
+
+          echo "No libc++_shared.so dependency found."
+
+      - name: Package single binary
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p artifact
+          cp Starzix-android-arm64 artifact/
+          test "$(find artifact -maxdepth 1 -type f | wc -l)" -eq 1
+      - name: Upload Android binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: Starzix-android-arm64
+          path: artifact/Starzix-android-arm64
+          if-no-files-found: error
