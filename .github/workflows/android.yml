@@ -17,9 +17,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Do NOT use android-actions/setup-android@v3.
-      # That action currently attempts to install the obsolete
-      # "tools" SDK package.
       - name: Locate Android SDK
         shell: bash
         run: |
@@ -52,19 +49,11 @@ jobs:
           fi
 
           if [ -z "$SDKMANAGER" ] || [ ! -x "$SDKMANAGER" ]; then
-            echo "ERROR: sdkmanager was not found."
-            find "$ANDROID_HOME/cmdline-tools" \
-              -maxdepth 4 \
-              -type f \
-              -name sdkmanager \
-              -print || true
+            echo "ERROR: sdkmanager not found."
             exit 1
           fi
 
           echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
-
-          echo "Using:"
-          echo "$SDKMANAGER"
 
           "$SDKMANAGER" --version
 
@@ -72,7 +61,6 @@ jobs:
         shell: bash
         run: |
           set -eux
-
           yes | "$SDKMANAGER" --licenses >/dev/null || true
 
       - name: Install Android NDK
@@ -93,15 +81,12 @@ jobs:
           NDK="$ANDROID_HOME/ndk/27.2.12479018"
           TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
 
-          test -d "$NDK"
           test -x "$TOOLCHAIN/aarch64-linux-android24-clang++"
 
           echo "ANDROID_NDK_HOME=$NDK" >> "$GITHUB_ENV"
 
-          echo "NDK:"
-          echo "$NDK"
+          echo "CXX=$TOOLCHAIN/aarch64-linux-android24-clang++" >> "$GITHUB_ENV"
 
-          echo "Compiler:"
           "$TOOLCHAIN/aarch64-linux-android24-clang++" --version
 
       - name: Verify Starzix source
@@ -117,13 +102,6 @@ jobs:
 
           echo "Starzix source detected."
 
-          echo "Build files:"
-          ls -la
-
-          echo
-          echo "Source files:"
-          find src -maxdepth 1 -type f -print | sort
-
       - name: Verify NNUE network
         shell: bash
         run: |
@@ -131,17 +109,10 @@ jobs:
 
           if [ ! -f src/net.bin ]; then
             echo "ERROR: src/net.bin was not found."
-            echo
-            echo "Starzix embeds the NNUE network through incbin.h."
-            echo "The network must exist in your fork at:"
-            echo
-            echo "    src/net.bin"
-            echo
-            echo "This workflow does not download or replace the network."
+            echo "The existing Starzix network must remain in your fork."
             exit 1
           fi
 
-          echo "Found Starzix NNUE network:"
           ls -lh src/net.bin
 
       - name: Build Starzix ARM64 NEON
@@ -149,58 +120,29 @@ jobs:
         run: |
           set -eux
 
-          NDK="$ANDROID_NDK_HOME"
-          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
-
-          CXX="$TOOLCHAIN/aarch64-linux-android24-clang++"
-
           OUTPUT="$GITHUB_WORKSPACE/Starzix-android-arm64"
 
-          # Starzix's normal makefile uses -march=native.
-          # DO NOT use that for Android cross compilation.
-          #
-          # The GitHub runner is x86-64, while the target is ARM64.
-          # Explicitly request ARMv8-A + NEON instead.
-          CXXFLAGS="
-            -std=c++23
-            -O3
-            -DNDEBUG
-            -flto
-            -funroll-loops
-            -fconstexpr-steps=100000000
-            -march=armv8-a+simd
-            -ffunction-sections
-            -fdata-sections
-            -fno-exceptions
-            -Wno-unused-command-line-argument
-          "
-
-          LDFLAGS="
-            -flto
-            -Wl,--gc-sections
-            -static-libstdc++
-          "
-
-          echo "Compiler:"
-          "$CXX" --version
-
-          echo
-          echo "Target:"
-          "$CXX" -dumpmachine
-
-          echo
-          echo "Building Starzix..."
+          CXX="$ANDROID_HOME/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++"
 
           "$CXX" \
-            $CXXFLAGS \
+            -std=c++23 \
+            -O3 \
+            -DNDEBUG \
+            -flto \
+            -funroll-loops \
+            -fconstexpr-steps=100000000 \
+            -march=armv8-a+simd \
+            -ffunction-sections \
+            -fdata-sections \
+            -Wno-unused-command-line-argument \
             src/*.cpp \
             -o "$OUTPUT" \
-            $LDFLAGS
+            -flto \
+            -Wl,--gc-sections \
+            -static-libstdc++
 
           chmod +x "$OUTPUT"
 
-          echo
-          echo "Build completed:"
           ls -lh "$OUTPUT"
 
       - name: Verify ARM64 binary
@@ -210,46 +152,30 @@ jobs:
 
           BINARY="Starzix-android-arm64"
 
-          test -f "$BINARY"
-          test -x "$BINARY"
-
-          echo "File information:"
           file "$BINARY"
-
-          echo
-          echo "ELF information:"
-          readelf -h "$BINARY" | grep -E \
-            'Class:|Machine:|Type:'
-
-          echo
-          echo "Checking for AArch64..."
 
           file "$BINARY" | grep -q \
             "ELF 64-bit.*ARM aarch64"
 
-      - name: Check dynamic dependencies
+          readelf -h "$BINARY" | grep -E \
+            'Class:|Machine:'
+
+      - name: Verify libc++ dependency
         shell: bash
         run: |
           set -eux
 
           BINARY="Starzix-android-arm64"
 
-          echo "Dynamic section:"
           readelf -d "$BINARY" || true
-
-          echo
-          echo "Checking for unwanted shared C++ runtime..."
 
           if readelf -d "$BINARY" | \
             grep -E 'libc\+\+_shared\.so|libc\+\+\.so'; then
-
-            echo
-            echo "ERROR: Binary depends on a shared libc++ library."
+            echo "ERROR: Shared libc++ dependency detected."
             exit 1
           fi
 
-          echo
-          echo "No shared libc++ dependency detected."
+          echo "No shared libc++ dependency."
 
       - name: Test UCI
         shell: bash
@@ -263,16 +189,12 @@ jobs:
             | timeout 30 "$BINARY" 2>&1 \
             | tee uci-test.txt
 
-          echo
-          echo "Checking UCI response..."
-
           grep -qi "uciok" uci-test.txt
           grep -qi "readyok" uci-test.txt
 
-          echo
           echo "UCI test passed."
 
-      - name: Prepare single-file artifact
+      - name: Prepare single binary
         shell: bash
         run: |
           set -eux
@@ -285,7 +207,6 @@ jobs:
 
           chmod +x release/Starzix-android-arm64
 
-          echo "Final artifact:"
           ls -lh release/Starzix-android-arm64
 
       - name: Upload Starzix Android ARM64
