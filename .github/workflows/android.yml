@@ -113,6 +113,7 @@ jobs:
             exit 1
           fi
 
+          echo "NNUE network:"
           ls -lh src/net.bin
 
       - name: Build Starzix ARM64 NEON
@@ -143,56 +144,71 @@ jobs:
 
           chmod +x "$OUTPUT"
 
+          echo "Build completed:"
           ls -lh "$OUTPUT"
 
-      - name: Verify ARM64 binary
+      - name: Verify ARM64 ELF
         shell: bash
         run: |
           set -eux
 
           BINARY="Starzix-android-arm64"
 
+          echo "File:"
           file "$BINARY"
+
+          echo
+          echo "ELF header:"
+          readelf -h "$BINARY"
 
           file "$BINARY" | grep -q \
             "ELF 64-bit.*ARM aarch64"
 
-          readelf -h "$BINARY" | grep -E \
-            'Class:|Machine:'
+          readelf -h "$BINARY" | grep -q \
+            "Machine:.*AArch64"
 
-      - name: Verify libc++ dependency
+          echo
+          echo "Confirmed: Android ARM64/AArch64 executable."
+
+      - name: Verify dynamic dependencies
         shell: bash
         run: |
           set -eux
 
           BINARY="Starzix-android-arm64"
 
+          echo "Dynamic section:"
           readelf -d "$BINARY" || true
+
+          echo
+          echo "Checking for shared C++ runtime..."
 
           if readelf -d "$BINARY" | \
             grep -E 'libc\+\+_shared\.so|libc\+\+\.so'; then
+
             echo "ERROR: Shared libc++ dependency detected."
             exit 1
           fi
 
-          echo "No shared libc++ dependency."
+          echo "No shared libc++ dependency detected."
 
-      - name: Test UCI
+      - name: Check Android NDK target
         shell: bash
         run: |
           set -eux
 
-          BINARY="./Starzix-android-arm64"
+          BINARY="Starzix-android-arm64"
 
-          printf \
-            'uci\nisready\nposition startpos\ngo depth 4\nquit\n' \
-            | timeout 30 "$BINARY" 2>&1 \
-            | tee uci-test.txt
+          echo "Checking ELF program headers..."
 
-          grep -qi "uciok" uci-test.txt
-          grep -qi "readyok" uci-test.txt
+          readelf -l "$BINARY" | head -80
 
-          echo "UCI test passed."
+          echo
+          echo "Android ARM64 build verification completed."
+
+      # IMPORTANT:
+      # Do not execute the ARM64 binary on this x86-64 GitHub runner.
+      # The resulting executable must be tested on an ARM64 Android device.
 
       - name: Prepare single binary
         shell: bash
@@ -207,6 +223,7 @@ jobs:
 
           chmod +x release/Starzix-android-arm64
 
+          echo "Final artifact:"
           ls -lh release/Starzix-android-arm64
 
       - name: Upload Starzix Android ARM64
