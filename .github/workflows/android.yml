@@ -5,8 +5,9 @@ on:
   push:
     paths:
       - 'src/**'
-      - '3rd-party/**'
       - '.github/workflows/android.yml'
+      - 'CMakeLists.txt'
+      - 'Makefile'
 
 jobs:
   build-android:
@@ -16,85 +17,253 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Android NDK
-        uses: android-actions/setup-android@v3
+      # Do NOT use android-actions/setup-android@v3 here.
+      # It currently tries to install the obsolete "tools" package.
+      - name: Locate Android SDK
+        shell: bash
+        run: |
+          set -eux
+
+          echo "ANDROID_HOME=${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+
+          if [ -z "${ANDROID_HOME:-}" ]; then
+            export ANDROID_HOME="$ANDROID_SDK_ROOT"
+          fi
+
+          if [ -z "${ANDROID_HOME:-}" ]; then
+            export ANDROID_HOME="/usr/local/lib/android/sdk"
+          fi
+
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$ANDROID_HOME/cmdline-tools/16.0/bin/sdkmanager"
+          fi
+
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -1)"
+          fi
+
+          if [ -z "$SDKMANAGER" ] || [ ! -x "$SDKMANAGER" ]; then
+            echo "ERROR: sdkmanager not found"
+            find "$ANDROID_HOME/cmdline-tools" -maxdepth 3 -type f -name sdkmanager -print || true
+            exit 1
+          fi
+
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
+
+          "$SDKMANAGER" --version
+
+      - name: Accept Android SDK licenses
+        shell: bash
+        run: |
+          set -eux
+
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
 
       - name: Install Android NDK
         shell: bash
         run: |
-          set -euxo pipefail
-          sdkmanager --install "ndk;27.2.12479018"
-          echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/27.2.12479018" >> "$GITHUB_ENV"
+          set -eux
 
-      - name: Build Starzix
+          "$SDKMANAGER" \
+            "platform-tools" \
+            "platforms;android-24" \
+            "build-tools;35.0.0" \
+            "ndk;27.2.12479018"
+
+      - name: Configure Android NDK
         shell: bash
         run: |
-          set -euxo pipefail
+          set -eux
 
-          NDK="$ANDROID_NDK_ROOT"
-          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          CXX="$TOOLCHAIN/aarch64-linux-android24-clang++"
+          NDK="$ANDROID_HOME/ndk/27.2.12479018"
 
-          test -f src/net.bin
+          test -d "$NDK"
 
-          "$CXX" \
-            -std=c++23 \
-            -O3 \
-            -flto \
-            -fuse-ld=lld \
-            -funroll-loops \
-            -fconstexpr-steps=100000000 \
-            -march=armv8-a+simd \
-            -Wall \
-            -Wextra \
-            -Werror \
-            -Wunused \
-            -Wconversion \
-            -Wsign-conversion \
-            -Wshadow \
-            -Wpedantic \
-            -Wold-style-cast \
-            -DNDEBUG \
-            -fPIE \
-            -pie \
-            -pthread \
-            -static-libstdc++ \
-            src/*.cpp \
-            -o Starzix-android-arm64
+          echo "ANDROID_NDK_HOME=$NDK" >> "$GITHUB_ENV"
 
-          "$TOOLCHAIN/llvm-strip" Starzix-android-arm64
+          echo "NDK installed at:"
+          "$NDK/ndk-build" --version || true
 
-          file Starzix-android-arm64
+          echo "AArch64 compiler:"
+          "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++" \
+            --version
 
-      - name: Verify Android runtime dependencies
+      - name: Find Starzix source
         shell: bash
         run: |
-          set -euxo pipefail
+          set -eux
 
-          NDK="$ANDROID_NDK_ROOT"
+          echo "Repository contents:"
+          find . -maxdepth 2 -type f | sort | head -200
+
+      - name: Build Starzix ARM64 NEON
+        shell: bash
+        run: |
+          set -eux
+
+          NDK="$ANDROID_NDK_HOME"
           TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
 
-          echo "Dynamic dependencies:"
-          "$TOOLCHAIN/llvm-readelf" -d Starzix-android-arm64 || true
+          export CC="$TOOLCHAIN/aarch64-linux-android24-clang"
+          export CXX="$TOOLCHAIN/aarch64-linux-android24-clang++"
 
-          if "$TOOLCHAIN/llvm-readelf" -d Starzix-android-arm64 \
-              | grep -q 'libc++_shared.so'; then
-            echo "ERROR: libc++_shared.so is still required"
+          export CFLAGS="-O3 -flto -ffunction-sections -fdata-sections -march=armv8-a+simd"
+          export CXXFLAGS="-O3 -flto -ffunction-sections -fdata-sections -march=armv8-a+simd -std=c++23"
+
+          export LDFLAGS="-flto -Wl,--gc-sections -static-libstdc++"
+
+          echo "CC=$CC"
+          echo "CXX=$CXX"
+
+          "$CXX" --version
+
+          # ------------------------------------------------------------
+          # Prefer the repository's native build system.
+          # ------------------------------------------------------------
+
+          if [ -f CMakeLists.txt ]; then
+
+            rm -rf build-android
+
+            cmake -S . -B build-android \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_C_COMPILER="$CC" \
+              -DCMAKE_CXX_COMPILER="$CXX" \
+              -DCMAKE_C_FLAGS="$CFLAGS" \
+              -DCMAKE_CXX_FLAGS="$CXXFLAGS" \
+              -DCMAKE_EXE_LINKER_FLAGS="$LDFLAGS" \
+              -DCMAKE_SHARED_LINKER_FLAGS="$LDFLAGS" \
+              -DCMAKE_MODULE_LINKER_FLAGS="$LDFLAGS"
+
+            cmake --build build-android --config Release --parallel 2
+
+          elif [ -f Makefile ]; then
+
+            make clean || true
+
+            make -j2 \
+              CC="$CC" \
+              CXX="$CXX" \
+              CFLAGS="$CFLAGS" \
+              CXXFLAGS="$CXXFLAGS" \
+              LDFLAGS="$LDFLAGS"
+
+          else
+            echo "ERROR: No CMakeLists.txt or Makefile found."
             exit 1
           fi
 
-          echo "No libc++_shared.so dependency found."
-
-      - name: Package single binary
+      - name: Locate Starzix binary
         shell: bash
         run: |
-          set -euxo pipefail
-          mkdir -p artifact
-          cp Starzix-android-arm64 artifact/
-          test "$(find artifact -maxdepth 1 -type f | wc -l)" -eq 1
-      - name: Upload Android binary
+          set -eux
+
+          echo "Searching for executable files..."
+
+          find . \
+            -type f \
+            -perm -111 \
+            ! -path './.git/*' \
+            -print
+
+          BINARY=""
+
+          # Prefer common Starzix executable names.
+          for candidate in \
+            "./build-android/Starzix" \
+            "./build-android/starzix" \
+            "./Starzix" \
+            "./starzix" \
+            "./bin/Starzix" \
+            "./bin/starzix"
+          do
+            if [ -f "$candidate" ] && [ -x "$candidate" ]; then
+              BINARY="$candidate"
+              break
+            fi
+          done
+
+          # Fallback: find an ARM64 ELF executable.
+          if [ -z "$BINARY" ]; then
+            while IFS= read -r candidate; do
+              if file "$candidate" | grep -q "ELF 64-bit.*ARM aarch64"; then
+                BINARY="$candidate"
+                break
+              fi
+            done < <(
+              find . \
+                -type f \
+                -perm -111 \
+                ! -path './.git/*'
+            )
+          fi
+
+          if [ -z "$BINARY" ]; then
+            echo "ERROR: Could not locate the Starzix binary."
+            exit 1
+          fi
+
+          echo "Found binary:"
+          echo "$BINARY"
+
+          file "$BINARY"
+          readelf -h "$BINARY" | grep -E 'Class|Machine'
+
+          mkdir -p release
+
+          cp "$BINARY" release/Starzix-android-arm64
+
+          chmod +x release/Starzix-android-arm64
+
+          echo "Final binary:"
+          ls -lh release/Starzix-android-arm64
+
+      - name: Verify no libc++ shared dependency
+        shell: bash
+        run: |
+          set -eux
+
+          BINARY="release/Starzix-android-arm64"
+
+          echo "Dynamic dependencies:"
+          readelf -d "$BINARY" || true
+
+          if readelf -d "$BINARY" | grep -E 'libc\+\+_shared\.so|libc\+\+\.so'; then
+            echo "ERROR: Binary still requires a shared libc++ library."
+            exit 1
+          fi
+
+          echo "No shared libc++ dependency detected."
+
+      - name: Test UCI
+        shell: bash
+        run: |
+          set -eux
+
+          BINARY="release/Starzix-android-arm64"
+
+          printf 'uci\nisready\nposition startpos\ngo depth 4\nquit\n' \
+            | timeout 30 "$BINARY" 2>&1 | tee uci-test.txt
+
+          grep -qi "uciok" uci-test.txt
+          grep -qi "readyok" uci-test.txt
+
+      - name: Show final binary information
+        shell: bash
+        run: |
+          set -eux
+
+          file release/Starzix-android-arm64
+          ls -lh release/Starzix-android-arm64
+
+      - name: Upload Starzix ARM64 binary
         uses: actions/upload-artifact@v4
         with:
           name: Starzix-android-arm64
-          path: artifact/Starzix-android-arm64
+          path: release/Starzix-android-arm64
           if-no-files-found: error
