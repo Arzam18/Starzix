@@ -13,8 +13,10 @@ int main(int argc, char* argv[])
         std::cout << "Using avx512 (fastest)" << std::endl;
     #elif defined(__AVX2__)
         std::cout << "Using avx2 (fast)" << std::endl;
+    #elif defined(__aarch64__) && defined(__ARM_NEON)
+        std::cout << "Using arm64 NEON (fast)" << std::endl;
     #else
-        std::cout << "Not using avx2 nor avx512 (slow)" << std::endl;
+        std::cout << "Using scalar NNUE evaluation" << std::endl;
     #endif
 
     Position pos = START_POS;

@@ -357,12 +357,12 @@ constexpr i32 evaluate(const BothAccumulators& bothAccs, const Color stm)
     // Activation function:
     // SCReLU(hiddenNeuron) = clamp(hiddenNeuron, 0, QA)^2
 
-    #if defined(__AVX2__) || (defined(__AVX512F__) && defined(__AVX512BW__))
+    #if defined(__AVX2__) || (defined(__AVX512F__) && defined(__AVX512BW__)) || defined(__ARM_NEON)
         // N is 16 and 32 for avx2 and avx512, respectively
 
         const Vec vecZero = setEpi16(0);  // N i16 zeros
         const Vec vecQA   = setEpi16(QA); // N i16 QA's
-        Vec vecSum = vecZero; // N/2 i32 zeros, the total running sum
+        Vec32 vecSum = {}; // N/2 i32 zeros, the total running sum
 
         for (const Color color : { stm, !stm })
             for (size_t i = 0; i < HL_SIZE; i += sizeof(Vec) / sizeof(i16))
